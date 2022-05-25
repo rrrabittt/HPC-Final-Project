@@ -29,14 +29,14 @@ int main( int argc, char **argv )
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-space_mesh_size",	&M, PETSC_NULL);
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-time_mesh_size",	&N, PETSC_NULL);
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-max_its",	&max_its, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-tol",	&tol, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-kappa",	&kappa, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-rho",	&rho, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-capacity",	&cc, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_step",	&delta_t, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-space_step",	&delta_x, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-length",	&length, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_end",	&time_end, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-tol",	&tol, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-kappa",	&kappa, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-rho",	&rho, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-capacity",	&cc, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_step",	&delta_t, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-space_step",	&delta_x, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-length",	&length, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_end",	&time_end, PETSC_NULL);
 
 	// parameter check
 
@@ -73,8 +73,8 @@ int main( int argc, char **argv )
 	for(PetscInt ii=0; ii<M+1; ii++) {
                 VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
         }
-        VecAssemblyBegin(ff);
-        VecAssemblyEnd(ff);
+	VecAssemblyBegin(ff);
+	VecAssemblyEnd(ff);
 
 	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
 
@@ -86,25 +86,25 @@ int main( int argc, char **argv )
 	MatMPIAIJSetPreallocation(A, 3, NULL, 3, NULL);
 	MatSeqAIJSetPreallocation(A, 3, NULL);
 
-        PetscInt	rstart, rend, m, n;
-        MatGetOwnershipRange(A, &rstart, &rend);
-        MatGetSize(A, &m, &n);
-        for (PetscInt ii=rstart; ii<rend; ii++) {
-                PetscInt    index[3] = {ii-1, ii, ii+1};
+	PetscInt	rstart, rend, m, n;
+	MatGetOwnershipRange(A, &rstart, &rend);
+	MatGetSize(A, &m, &n);
+	for (PetscInt ii=rstart; ii<rend; ii++) {
+		PetscInt    index[3] = {ii-1, ii, ii+1};
 		PetscScalar value[3] = {-1.0*para, 2.0*para+1.0, -1.0*para};
-                if (ii == 0) {
-                        MatSetValues(A, 1, &ii, 2, &index[1], &value[1], INSERT_VALUES);
-                }
+		if (ii == 0) {
+			MatSetValues(A, 1, &ii, 2, &index[1], &value[1], INSERT_VALUES);
+		}
 		else if (ii == n-1) {
 			MatSetValues(A, 1, &ii, 2, index, value, INSERT_VALUES);
 		}
 		else {
-                        MatSetValues(A, 1, &ii, 3, index, value, INSERT_VALUES);
+			MatSetValues(A, 1, &ii, 3, index, value, INSERT_VALUES);
 		}
-        }
+	}
 
-        MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
-        MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
+	MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
+	MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
 	
 	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
 
@@ -151,8 +151,8 @@ int main( int argc, char **argv )
 	// destory
 //	KSPDestroy(&ksp);
 	VecDestroy(&xx);
-        VecDestroy(&ff);
-        MatDestroy(&A);
+	VecDestroy(&ff);
+	MatDestroy(&A);
 
 	PetscFinalize();
 	delete [] coor_x; delete [] h_src;
