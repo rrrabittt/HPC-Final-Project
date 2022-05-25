@@ -22,6 +22,12 @@ int main( int argc, char **argv )
 	PetscReal	delta_t = 0.1;
 	PetscReal	delta_x = 0.1;
 	PetscReal	time_end = 1.0;
+	PetscReal       gg_h = 0.0;	// prescribed temperature at x=0
+	PetscReal       gg_t = 0.0;	// prescribed temperature at x=1
+	PetscReal       hh_h = 1.0;	// heat flux at x=0
+	PetscReal       hh_t = 1.0;	// heat flux at x=1
+	PetscInt	head_bc = 0;	// boundary condition at x=0: 0 for prescribed temperature, 1 for heat flux.
+	PetscInt	tail_bc = 0;	// boundary condition at x=0: 0 for prescribed temperature, 1 for heat flux.
 
 	// get option
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-space_mesh_size",	&M, PETSC_NULL);
@@ -33,6 +39,12 @@ int main( int argc, char **argv )
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_step",	&delta_t, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-space_step",	&delta_x, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_end",	&time_end, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-gg_head",	&gg_h, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-gg_tail",	&gg_t, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-hh_head",	&hh_h, PETSC_NULL);
+	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-hh_tail",	&hh_t, PETSC_NULL);
+	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-head_bc",	&head_bc, PETSC_NULL);
+	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-tail_bc",	&tail_bc, PETSC_NULL);
 
 	// parameter check
 
@@ -79,8 +91,9 @@ int main( int argc, char **argv )
 	MatGetOwnershipRange(A, &rstart, &rend);
 	MatGetSize(A, &m, &n);
 	for (PetscInt ii=rstart; ii<rend; ii++) {
-		PetscInt    index[3] = {ii-1, ii, ii+1};
-		PetscScalar value[3] = {-1.0*para1, 2.0*para1+1.0, -1.0*para1};
+		PetscInt	index[3] = {ii-1, ii, ii+1};
+		PetscScalar	value[3] = {-1.0*para1, 2.0*para1+1.0, -1.0*para1};
+
 		if (ii == 0) {
 			MatSetValues(A, 1, &ii, 2, &index[1], &value[1], INSERT_VALUES);
 		}
@@ -113,6 +126,66 @@ int main( int argc, char **argv )
 	VecAssemblyEnd(uu);
 
 	VecView(uu, PETSC_VIEWER_STDOUT_(comm));
+
+	// boundary conditions
+	if (!head_bc) {
+		PetscInt	row = 0;
+		PetscInt	col[2] = {0, 1};
+		PetscScalar	value[2] = {1.0, 0.0};
+
+		MatSetValues(A, 1, &row, 2, col, value, INSERT_VALUES);
+		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
+		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
+
+		VecSetValues(uu, 1, &row, &gg_h, INSERT_VALUES);
+		VecAssemblyBegin(uu);
+		VecAssemblyEnd(uu);
+	}
+	else {
+		PetscInt        row = 0;
+		PetscInt        col[2] = {0, 1};
+		PetscScalar     value[2] = {1.0, -1.0};
+		PetscScalar	hbc = (delta_x * hh_h) / kappa;
+
+		MatSetValues(A, 1, &row, 2, col, value, INSERT_VALUES);
+		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
+		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
+
+		VecSetValues(ff, 1, &row, &hbc, INSERT_VALUES);
+		VecAssemblyBegin(ff);
+		VecAssemblyEnd(ff);
+	}
+	if (!tail_bc) {
+		PetscInt	row = M;
+		PetscInt	col[2] = {M-1, M};
+		PetscScalar	value[2] = {0.0, 1.0};
+
+		MatSetValues(A, 1, &row, 2, col, value, INSERT_VALUES);
+		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
+		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
+
+		VecSetValues(uu, 1, &row, &gg_t, INSERT_VALUES);
+		VecAssemblyBegin(uu);
+		VecAssemblyEnd(uu);
+	}
+	else {
+		PetscInt        row = M;
+		PetscInt        col[2] = {M-1, M};
+		PetscScalar     value[2] = {1.0, -1.0};
+		PetscScalar	hbc = (delta_x * hh_t) / kappa;
+
+		MatSetValues(A, 1, &row, 2, col, value, INSERT_VALUES);
+		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
+		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
+
+		VecSetValues(ff, 1, &row, &hbc, INSERT_VALUES);
+		VecAssemblyBegin(ff);
+		VecAssemblyEnd(ff);
+	}
+
+	VecView(uu, PETSC_VIEWER_STDOUT_(comm));
+	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
+	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
 
 //	// ksp solver
 //	KSPCreate(comm, &ksp);
