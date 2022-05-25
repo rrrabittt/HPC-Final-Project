@@ -14,7 +14,6 @@ int main( int argc, char **argv )
 
 	// variables
 	PetscInt	M = 10;
-	PetscInt	N = 10;
 	PetscInt        max_its = 100;
 	PetscReal       tol = 1.0e-5;
 	PetscReal	kappa = 1.0;	// thermal conductivity
@@ -22,12 +21,10 @@ int main( int argc, char **argv )
 	PetscReal	cc = 1.0;	// specific heat capacity
 	PetscReal	delta_t = 0.1;
 	PetscReal	delta_x = 0.1;
-	PetscReal	length = 1.0;
 	PetscReal	time_end = 1.0;
 
 	// get option
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-space_mesh_size",	&M, PETSC_NULL);
-	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-time_mesh_size",	&N, PETSC_NULL);
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-max_its",	&max_its, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-tol",	&tol, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-kappa",	&kappa, PETSC_NULL);
@@ -35,44 +32,36 @@ int main( int argc, char **argv )
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-capacity",	&cc, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_step",	&delta_t, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-space_step",	&delta_x, PETSC_NULL);
-	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-length",	&length, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_end",	&time_end, PETSC_NULL);
 
 	// parameter check
 
 	// constant scaler
-	const double para = (delta_t * kappa) / (delta_x * delta_x * rho * cc);
+	const double para1 = (delta_t * kappa) / (delta_x * delta_x * rho * cc);
+	const double para2 = delta_t / (rho * cc);
 	const double pi = 3.141592653589793;
-	const double l = 1.0;
+	const double ll = 1.0;
 
 	// spacial coordinates
-	Vec	xx;
-	VecCreate(comm, &xx);
-	VecSetSizes(xx, PETSC_DECIDE, M+1);
-	VecSetFromOptions(xx);
 	double * coor_x = new double[M+1](); 
 	for(int ii=1; ii<M+1; ii++) {
 		coor_x[ii] = coor_x[ii-1] + delta_x;
 	}
-	for(PetscInt ii=0; ii<M+1; ii++) {
-		VecSetValues(xx, 1, &ii, &coor_x[ii], INSERT_VALUES);
-	}
-	VecAssemblyBegin(xx);
-	VecAssemblyEnd(xx);
-
-
-	VecView(xx, PETSC_VIEWER_STDOUT_(comm));
 	
 	// heat source
-	Vec	ff;
-	VecDuplicate(xx, &ff);
 	double * h_src = new double[M+1]();
 	for(int ii=0; ii<M+1; ii++) {
-                h_src[ii] = sin(l * pi * coor_x[ii]);
-        }
+		h_src[ii] = para2 * sin(ll * pi * coor_x[ii]);
+	}
+
+	Vec	ff;
+	VecCreate(comm, &ff);
+	VecSetSizes(ff, PETSC_DECIDE, M+1);
+	VecSetFromOptions(ff);
 	for(PetscInt ii=0; ii<M+1; ii++) {
-                VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
-        }
+		VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
+	}
+
 	VecAssemblyBegin(ff);
 	VecAssemblyEnd(ff);
 
@@ -91,7 +80,7 @@ int main( int argc, char **argv )
 	MatGetSize(A, &m, &n);
 	for (PetscInt ii=rstart; ii<rend; ii++) {
 		PetscInt    index[3] = {ii-1, ii, ii+1};
-		PetscScalar value[3] = {-1.0*para, 2.0*para+1.0, -1.0*para};
+		PetscScalar value[3] = {-1.0*para1, 2.0*para1+1.0, -1.0*para1};
 		if (ii == 0) {
 			MatSetValues(A, 1, &ii, 2, &index[1], &value[1], INSERT_VALUES);
 		}
@@ -108,7 +97,22 @@ int main( int argc, char **argv )
 	
 	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
 
-	MatSetOption(A, MAT_SYMMETRIC, PETSC_TRUE);
+	// initial condition: u_0 = exp(x)
+	double * u_0 = new double[M+1]();
+	for(int ii=0; ii<M+1; ii++) {
+		u_0[ii] = exp(coor_x[ii]);
+	}
+
+	Vec	uu;
+	VecDuplicate(ff, &uu);
+	for(PetscInt ii=0; ii<M+1; ii++) {
+		VecSetValues(uu, 1, &ii, &u_0[ii], INSERT_VALUES);
+	}
+
+	VecAssemblyBegin(uu);
+	VecAssemblyEnd(uu);
+
+	VecView(uu, PETSC_VIEWER_STDOUT_(comm));
 
 //	// ksp solver
 //	KSPCreate(comm, &ksp);
@@ -150,11 +154,11 @@ int main( int argc, char **argv )
 
 	// destory
 //	KSPDestroy(&ksp);
-	VecDestroy(&xx);
+	VecDestroy(&uu);
 	VecDestroy(&ff);
 	MatDestroy(&A);
 
 	PetscFinalize();
-	delete [] coor_x; delete [] h_src;
+	delete [] coor_x; delete [] h_src; delete [] u_0;
 	return 0;
 }
