@@ -5,8 +5,6 @@ static char help[] = "To solve the transient heat equation in a one-dimensional 
 int main( int argc, char **argv )
 {
 	MPI_Comm	comm;
-	Vec		zold, znew, yold, ynew;
-	Mat		A;
 	KSP		ksp;
 	PC		pc;
 
@@ -15,65 +13,93 @@ int main( int argc, char **argv )
 	comm = PETSC_COMM_WORLD;
 
 	// variables
-	PetscInt	m = 5;
+	PetscInt	M = 10;
+	PetscInt	N = 10;
 	PetscInt        max_its = 100;
-        PetscReal       tol = 1.0e-5;
+	PetscReal       tol = 1.0e-5;
 	PetscReal	kappa = 1.0;	// thermal conductivity
 	PetscReal	rho = 1.0;	// density
 	PetscReal	cc = 1.0;	// specific heat capacity
-	PetscReal	delta_t = 1.0e-2;
-	PetscReal	delta_x = 1.0e-2;
+	PetscReal	delta_t = 0.1;
+	PetscReal	delta_x = 0.1;
+	PetscReal	length = 1.0;
+	PetscReal	time_end = 1.0;
 
 	// get option
-	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-mat_size", &m, PETSC_NULL);
-	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-max_its", &max_its, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-tol", &tol, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-kappa", &kappa, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-rho", &rho, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-capacity", &cc, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_step", &delta_t, PETSC_NULL);
-        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-space_step", &delta_x, PETSC_NULL);
+	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-space_mesh_size",	&M, PETSC_NULL);
+	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-time_mesh_size",	&N, PETSC_NULL);
+	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-max_its",	&max_its, PETSC_NULL);
+        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-tol",	&tol, PETSC_NULL);
+        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-kappa",	&kappa, PETSC_NULL);
+        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-rho",	&rho, PETSC_NULL);
+        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-capacity",	&cc, PETSC_NULL);
+        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_step",	&delta_t, PETSC_NULL);
+        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-space_step",	&delta_x, PETSC_NULL);
+        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-length",	&length, PETSC_NULL);
+        PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_end",	&time_end, PETSC_NULL);
+
+	// parameter check
 
 	// constant scaler
 	const double para = (delta_t * kappa) / (delta_x * delta_x * rho * cc);
+	const double pi = 3.141592653589793;
+	const double l = 1.0;
 
-	// generate vector and matrix
-	VecCreate(comm, &znew);
-	VecSetSizes(znew, PETSC_DECIDE, m);
-	VecSetFromOptions(znew);
-	VecDuplicate(znew, &zold);
-        VecDuplicate(znew, &yold);
-        VecDuplicate(znew, &ynew);
-	VecSet(znew, 0.0);
-        VecSet(ynew, 0.0);
+	// spacial coordinates
+	Vec	xx;
+	VecCreate(comm, &xx);
+	VecSetSizes(xx, PETSC_DECIDE, M+1);
+	VecSetFromOptions(xx);
+	double * coor_x = new double[M+1](); 
+	for(int ii=1; ii<M+1; ii++) {
+		coor_x[ii] = coor_x[ii-1] + delta_x;
+	}
+	for(PetscInt ii=0; ii<M+1; ii++) {
+		VecSetValues(xx, 1, &ii, &coor_x[ii], INSERT_VALUES);
+	}
+	VecAssemblyBegin(xx);
+	VecAssemblyEnd(xx);
 
-	VecSetValue(znew, 0, 1.0, INSERT_VALUES);
 
-	VecAssemblyBegin(znew);
-	VecAssemblyEnd(znew);
+	VecView(xx, PETSC_VIEWER_STDOUT_(comm));
+	
+	// heat source
+	Vec	ff;
+	VecDuplicate(xx, &ff);
+	double * h_src = new double[M+1]();
+	for(int ii=0; ii<M+1; ii++) {
+                h_src[ii] = sin(l * pi * coor_x[ii]);
+        }
+	for(PetscInt ii=0; ii<M+1; ii++) {
+                VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
+        }
+        VecAssemblyBegin(ff);
+        VecAssemblyEnd(ff);
 
-	VecView(znew, PETSC_VIEWER_STDOUT_(comm));
+	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
 
+	// matrix A
+	Mat	A;
 	MatCreate(comm, &A);
-	MatSetSizes(A, PETSC_DECIDE, PETSC_DECIDE, m, m);
+	MatSetSizes(A, PETSC_DECIDE, PETSC_DECIDE, M+1, M+1);
 	MatSetFromOptions(A);
 	MatMPIAIJSetPreallocation(A, 3, NULL, 3, NULL);
 	MatSeqAIJSetPreallocation(A, 3, NULL);
 
-        PetscInt	rstart, rend, M, N;
+        PetscInt	rstart, rend, m, n;
         MatGetOwnershipRange(A, &rstart, &rend);
-        MatGetSize(A, &M, &N);
-        for (PetscInt i=rstart; i<rend; i++) {
-                PetscInt    index[3] = {i-1, i, i+1};
+        MatGetSize(A, &m, &n);
+        for (PetscInt ii=rstart; ii<rend; ii++) {
+                PetscInt    index[3] = {ii-1, ii, ii+1};
 		PetscScalar value[3] = {-1.0*para, 2.0*para+1.0, -1.0*para};
-                if (i == 0) {
-                        MatSetValues(A, 1, &i, 2, &index[1], &value[1], INSERT_VALUES);
+                if (ii == 0) {
+                        MatSetValues(A, 1, &ii, 2, &index[1], &value[1], INSERT_VALUES);
                 }
-		else if (i == N-1) {
-			MatSetValues(A, 1, &i, 2, index, value, INSERT_VALUES);
+		else if (ii == n-1) {
+			MatSetValues(A, 1, &ii, 2, index, value, INSERT_VALUES);
 		}
 		else {
-                        MatSetValues(A, 1, &i, 3, index, value, INSERT_VALUES);
+                        MatSetValues(A, 1, &ii, 3, index, value, INSERT_VALUES);
 		}
         }
 
@@ -121,15 +147,14 @@ int main( int argc, char **argv )
 //	// output
 //	PetscPrintf(comm, "Error: %g,\t Iterations: %D\n", (double)err, its);
 //        PetscPrintf(comm, "The smallest eigenvalue: %g\n", (double)lamda);
-//
-//	// destory
+
+	// destory
 //	KSPDestroy(&ksp);
-	VecDestroy(&zold);
-        VecDestroy(&znew);
-        VecDestroy(&yold);
-        VecDestroy(&ynew);
+	VecDestroy(&xx);
+        VecDestroy(&ff);
         MatDestroy(&A);
 
 	PetscFinalize();
+	delete [] coor_x; delete [] h_src;
 	return 0;
 }
