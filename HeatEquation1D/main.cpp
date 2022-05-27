@@ -2,6 +2,10 @@ static char help[] = "To solve the transient heat equation in a one-dimensional 
 
 #include <petscksp.h>
 
+int BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f,
+	PetscReal delta_t, PetscReal time_end, PetscReal M,
+	KSP ksp, PC pc );
+
 int main( int argc, char **argv )
 {
 	MPI_Comm	comm;
@@ -70,14 +74,15 @@ int main( int argc, char **argv )
 	VecCreate(comm, &ff);
 	VecSetSizes(ff, PETSC_DECIDE, M+1);
 	VecSetFromOptions(ff);
-	for(PetscInt ii=0; ii<M+1; ii++) {
-		VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
-	}
+	VecSet(ff, 0.0);
+//	for(PetscInt ii=0; ii<M+1; ii++) {
+//		VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
+//	}
+//
+//	VecAssemblyBegin(ff);
+//	VecAssemblyEnd(ff);
 
-	VecAssemblyBegin(ff);
-	VecAssemblyEnd(ff);
-
-	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
+//	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
 
 	// matrix A
 	Mat	A;
@@ -108,7 +113,7 @@ int main( int argc, char **argv )
 	MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
 	MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
 	
-	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
+//	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
 
 	// initial condition: u_0 = exp(x)
 	double * u_0 = new double[M+1]();
@@ -125,7 +130,7 @@ int main( int argc, char **argv )
 	VecAssemblyBegin(uu);
 	VecAssemblyEnd(uu);
 
-	VecView(uu, PETSC_VIEWER_STDOUT_(comm));
+//	VecView(uu, PETSC_VIEWER_STDOUT_(comm));
 
 	// boundary conditions
 	if (!head_bc) {
@@ -187,47 +192,20 @@ int main( int argc, char **argv )
 	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
 	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
 
-//	// ksp solver
-//	KSPCreate(comm, &ksp);
-//	KSPSetOperators(ksp, A, A);
-//	KSPGetPC(ksp, &pc);
-//	PCSetType(pc, PCJACOBI);
-//	KSPSetTolerances(ksp, 1.e-2/m, 1.e-50, PETSC_DEFAULT, PETSC_DEFAULT);
-//	KSPSetFromOptions(ksp);
-//
-//	// solve
-//        PetscInt        its = 0;
-//        PetscReal       yoldNorm = 0.0, ynewNorm = 0.0;
-//        PetscScalar     y = 0.0;
-//        PetscReal       err = 10.0;
-//        while (its < max_its && err > tol) {
-//                VecCopy(ynew, yold);
-//		VecCopy(znew, zold);
-//
-//                KSPSolve(ksp, zold, ynew);
-//
-//                VecNorm(ynew, NORM_2, &ynewNorm);
-//                VecNorm(yold, NORM_2, &yoldNorm);
-//
-//                y = 1.0 / ynewNorm;
-//                VecAXPBY(znew, y, 0.0, ynew);
-//
-//                err = PetscAbsReal(yoldNorm - ynewNorm);
-//                its++;
-//        }
-//
-//	PetscReal       lamda;
-//	KSPSolve(ksp, znew, ynew);
-//        VecTDot(ynew, znew, &lamda);
-//	lamda = 1.0 / lamda;
-//
-//	// output
-//	PetscPrintf(comm, "Error: %g,\t Iterations: %D\n", (double)err, its);
-//        PetscPrintf(comm, "The smallest eigenvalue: %g\n", (double)lamda);
+	// solver
+	KSPCreate(comm, &ksp);
+	Vec	u_new;
+	VecDuplicate(uu, &u_new);
+
+	// implicit solver
+	BEuler( comm, A, u_new, uu, ff, delta_t, time_end, M, ksp, pc );
+
+	VecView(u_new, PETSC_VIEWER_STDOUT_(comm));
 
 	// destory
-//	KSPDestroy(&ksp);
+	KSPDestroy(&ksp);
 	VecDestroy(&uu);
+	VecDestroy(&u_new);
 	VecDestroy(&ff);
 	MatDestroy(&A);
 
@@ -235,3 +213,36 @@ int main( int argc, char **argv )
 	delete [] coor_x; delete [] h_src; delete [] u_0;
 	return 0;
 }
+
+int BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f,
+	PetscReal delta_t, PetscReal time_end, PetscReal M,
+	KSP ksp, PC pc )
+{
+	PetscInt	N = time_end / delta_t;
+	PetscInt	its;
+	PetscReal	rnorm;
+	PetscReal	time = 0.0;
+
+	// ksp set
+	KSPSetOperators(ksp, A, A);
+	KSPSetType(ksp, KSPGMRES);
+	KSPGetPC(ksp, &pc);
+	PCSetType(pc, PCJACOBI);
+	KSPSetTolerances(ksp, 1.e-6, PETSC_DEFAULT, PETSC_DEFAULT, PETSC_DEFAULT);
+	KSPSetFromOptions(ksp);
+
+	// solver
+	for(int ii=1; ii<N+1; ii++) {
+		time += delta_t;
+		VecAXPY(b, 1.0, f);
+		KSPSolve(ksp, b, x);
+		VecCopy(x, b);
+		KSPMonitor(ksp, its, rnorm);
+		PetscPrintf(comm, "======> time_index: %D\t time: %g\n", ii, (double)time);
+		PetscPrintf(comm, "        KSP its: %D\t r_norm: %g\n", its, (double)rnorm);
+		PetscPrintf(comm, "        solver done.\n");
+	}
+
+	return 0;
+}
+
