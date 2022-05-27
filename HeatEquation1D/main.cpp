@@ -74,13 +74,12 @@ int main( int argc, char **argv )
 	VecCreate(comm, &ff);
 	VecSetSizes(ff, PETSC_DECIDE, M+1);
 	VecSetFromOptions(ff);
-	VecSet(ff, 0.0);
-//	for(PetscInt ii=0; ii<M+1; ii++) {
-//		VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
-//	}
-//
-//	VecAssemblyBegin(ff);
-//	VecAssemblyEnd(ff);
+	for(PetscInt ii=0; ii<M+1; ii++) {
+		VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
+	}
+
+	VecAssemblyBegin(ff);
+	VecAssemblyEnd(ff);
 
 //	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
 
