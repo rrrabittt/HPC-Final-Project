@@ -3,7 +3,8 @@ static char help[] = "To solve the transient heat equation in a one-dimensional 
 #include <petscksp.h>
 
 int BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
-	PetscReal delta_t, PetscReal time_end, PetscReal M );
+	PetscReal delta_t, PetscReal time_end, PetscInt M,
+	PetscInt head_bc, PetscInt tail_bc, PetscReal hbc);
 
 int AddBC( MPI_Comm comm, Mat A, Vec uu, Vec ff, PetscInt M, PetscReal hbc,
 	PetscInt head_bc, PetscInt tail_bc, 
@@ -144,7 +145,7 @@ int main( int argc, char **argv )
 	VecDuplicate(uu, &u_new);
 
 	// implicit solver
-	BEuler( comm, A, u_new, uu, ff, ksp, pc, delta_t, time_end, M );
+	BEuler( comm, A, u_new, uu, ff, ksp, pc, delta_t, time_end, M, head_bc, tail_bc, hbc );
 
 	VecView(u_new, PETSC_VIEWER_STDOUT_(comm));
 
@@ -161,7 +162,8 @@ int main( int argc, char **argv )
 }
 
 int BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
-	PetscReal delta_t, PetscReal time_end, PetscReal M )
+	PetscReal delta_t, PetscReal time_end, PetscInt M,
+	PetscInt head_bc, PetscInt tail_bc, PetscReal hbc )
 {
 	PetscInt	N = time_end / delta_t;
 	PetscInt	its;
@@ -180,11 +182,22 @@ int BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 	for(int ii=1; ii<N+1; ii++) {
 		time += delta_t;
 		VecAXPY(b, 1.0, f);
+		if (head_bc) {
+			PetscInt        row = 0;
+			VecSetValues(b, 1, &row, &hbc, INSERT_VALUES);
+		}
+		if (tail_bc) {
+			VecSetValues(b, 1, &M, &hbc, INSERT_VALUES);
+		}
+		VecAssemblyBegin(x);
+		VecAssemblyEnd(x);
 		KSPSolve(ksp, b, x);
 		VecCopy(x, b);
+		VecView(x, PETSC_VIEWER_STDOUT_(comm));
 		KSPMonitor(ksp, its, rnorm);
 		PetscPrintf(comm, "======> time_index: %D\t time: %g\n", ii, (double)time);
 		PetscPrintf(comm, "        KSP its: %D\t r_norm: %g\n", its, (double)rnorm);
+		PetscPrintf(comm, "        HBC: %g\n", (double)hbc);
 		PetscPrintf(comm, "        solver done.\n");
 	}
 
@@ -242,7 +255,7 @@ int AddBC( MPI_Comm comm, Mat A, Vec uu, Vec ff, PetscInt M, PetscScalar hbc,
 	else {
 		PetscInt        row = M;
 		PetscInt        col[2] = {M-1, M};
-		PetscScalar     value[2] = {1.0, -1.0};
+		PetscScalar     value[2] = {-1.0, 1.0};
 
 		MatSetValues(A, 1, &row, 2, col, value, INSERT_VALUES);
 		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
