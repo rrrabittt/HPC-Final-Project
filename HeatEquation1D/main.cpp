@@ -3,12 +3,10 @@ static char help[] = "To solve the transient heat equation in a one-dimensional 
 #include <petscksp.h>
 
 int BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
-	PetscReal delta_t, PetscReal time_end, PetscInt M,
-	PetscInt head_bc, PetscInt tail_bc, PetscReal hbc);
+	PetscReal delta_t, PetscReal time_end, PetscInt M, PetscInt head_bc, PetscInt tail_bc,
+	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t );
 
-int AddBC( MPI_Comm comm, Mat A, Vec uu, Vec ff, PetscInt M, PetscReal hbc,
-	PetscInt head_bc, PetscInt tail_bc, 
-	PetscReal gg_h, PetscReal gg_t, PetscReal hh_h, PetscReal hh_t);
+int MatBC( MPI_Comm comm, Mat A, PetscInt M, PetscInt head_bc, PetscInt tail_bc );
 
 int main( int argc, char **argv )
 {
@@ -38,14 +36,13 @@ int main( int argc, char **argv )
 	PetscInt	tail_bc = 0;	// boundary condition at x=0: 0 for prescribed temperature, 1 for heat flux.
 
 	// get option
-	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-space_mesh_size",	&M, PETSC_NULL);
+	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-mesh_size",	&M, PETSC_NULL);
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-max_its",	&max_its, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-tol",	&tol, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-kappa",	&kappa, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-rho",	&rho, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-capacity",	&cc, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_step",	&delta_t, PETSC_NULL);
-	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-space_step",	&delta_x, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-time_end",	&time_end, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-gg_head",	&gg_h, PETSC_NULL);
 	PetscOptionsGetReal(PETSC_NULL, PETSC_NULL, "-gg_tail",	&gg_t, PETSC_NULL);
@@ -55,11 +52,13 @@ int main( int argc, char **argv )
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-tail_bc",	&tail_bc, PETSC_NULL);
 
 	// parameter check
+	delta_x = 1.0 / M;
 
 	// constant scalar
 	const double para1 = (delta_t * kappa) / (delta_x * delta_x * rho * cc);
 	const double para2 = delta_t / (rho * cc);
-	PetscReal hbc = (delta_x * hh_t) / kappa;
+	PetscReal hbc_h = (delta_x * hh_h) / kappa;
+	PetscReal hbc_t = (delta_x * hh_t) / kappa;
 	const double pi = 3.141592653589793;
 	const double ll = 1.0;
 
@@ -137,7 +136,7 @@ int main( int argc, char **argv )
 //	VecView(uu, PETSC_VIEWER_STDOUT_(comm));
 
 	// boundary conditions
-	AddBC( comm, A, uu, ff, M, hbc, head_bc, tail_bc, gg_h, gg_t, hh_h, hh_t);
+	MatBC( comm, A, M, head_bc, tail_bc );
 
 	// solver
 	KSPCreate(comm, &ksp);
@@ -145,7 +144,7 @@ int main( int argc, char **argv )
 	VecDuplicate(uu, &u_new);
 
 	// implicit solver
-	BEuler( comm, A, u_new, uu, ff, ksp, pc, delta_t, time_end, M, head_bc, tail_bc, hbc );
+	BEuler( comm, A, u_new, uu, ff, ksp, pc, delta_t, time_end, M, head_bc, tail_bc, hbc_h, hbc_t, gg_h, hh_t );
 
 	VecView(u_new, PETSC_VIEWER_STDOUT_(comm));
 
@@ -162,8 +161,8 @@ int main( int argc, char **argv )
 }
 
 int BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
-	PetscReal delta_t, PetscReal time_end, PetscInt M,
-	PetscInt head_bc, PetscInt tail_bc, PetscReal hbc )
+	PetscReal delta_t, PetscReal time_end, PetscInt M, PetscInt head_bc, PetscInt tail_bc,
+	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t )
 {
 	PetscInt	N = time_end / delta_t;
 	PetscInt	its;
@@ -180,33 +179,36 @@ int BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 
 	// solver
 	for(int ii=1; ii<N+1; ii++) {
+		PetscInt        row = 0;
 		time += delta_t;
 		VecAXPY(b, 1.0, f);
 		if (head_bc) {
-			PetscInt        row = 0;
-			VecSetValues(b, 1, &row, &hbc, INSERT_VALUES);
+			VecSetValues(b, 1, &row, &hbc_h, INSERT_VALUES);
+		}
+		else if (!head_bc) {
+			VecSetValues(b, 1, &row, &gg_h, INSERT_VALUES);
 		}
 		if (tail_bc) {
-			VecSetValues(b, 1, &M, &hbc, INSERT_VALUES);
+			VecSetValues(b, 1, &M, &hbc_t, INSERT_VALUES);
+		}
+		else if (!head_bc) {
+			VecSetValues(b, 1, &M, &gg_h, INSERT_VALUES);
 		}
 		VecAssemblyBegin(x);
 		VecAssemblyEnd(x);
 		KSPSolve(ksp, b, x);
 		VecCopy(x, b);
-		VecView(x, PETSC_VIEWER_STDOUT_(comm));
+//		VecView(x, PETSC_VIEWER_STDOUT_(comm));
 		KSPMonitor(ksp, its, rnorm);
 		PetscPrintf(comm, "======> time_index: %D\t time: %g\n", ii, (double)time);
 		PetscPrintf(comm, "        KSP its: %D\t r_norm: %g\n", its, (double)rnorm);
-		PetscPrintf(comm, "        HBC: %g\n", (double)hbc);
 		PetscPrintf(comm, "        solver done.\n");
 	}
 
 	return 0;
 }
 
-int AddBC( MPI_Comm comm, Mat A, Vec uu, Vec ff, PetscInt M, PetscScalar hbc, 
-	PetscInt head_bc, PetscInt tail_bc, 
-	PetscReal gg_h, PetscReal gg_t, PetscReal hh_h, PetscReal hh_t)
+int MatBC( MPI_Comm comm, Mat A, PetscInt M, PetscInt head_bc, PetscInt tail_bc )
 {
 	if (!head_bc) {
 		PetscInt	row = 0;
@@ -217,13 +219,9 @@ int AddBC( MPI_Comm comm, Mat A, Vec uu, Vec ff, PetscInt M, PetscScalar hbc,
 		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
 		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
 
-		VecSetValues(uu, 1, &row, &gg_h, INSERT_VALUES);
-		VecAssemblyBegin(uu);
-		VecAssemblyEnd(uu);
-
-		PetscPrintf(comm, "======> Essential BC at x=0: prescribed temperature %g\n", gg_h);
+		PetscPrintf(comm, "======> Essential BC at x=0: prescribed temperature.\n");
 	}
-	else {
+	else if (head_bc) {
 		PetscInt        row = 0;
 		PetscInt        col[2] = {0, 1};
 		PetscScalar     value[2] = {1.0, -1.0};
@@ -232,11 +230,7 @@ int AddBC( MPI_Comm comm, Mat A, Vec uu, Vec ff, PetscInt M, PetscScalar hbc,
 		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
 		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
 
-		VecSetValues(uu, 1, &row, &hbc, INSERT_VALUES);
-		VecAssemblyBegin(uu);
-		VecAssemblyEnd(uu);
-
-		PetscPrintf(comm, "======> Natural BC at x=0: heat flux %g\n", hh_h);
+		PetscPrintf(comm, "======> Natural BC at x=0: heat flux.\n");
 	}
 	if (!tail_bc) {
 		PetscInt	row = M;
@@ -247,12 +241,9 @@ int AddBC( MPI_Comm comm, Mat A, Vec uu, Vec ff, PetscInt M, PetscScalar hbc,
 		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
 		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
 
-		VecSetValues(uu, 1, &row, &gg_t, INSERT_VALUES);
-		VecAssemblyBegin(uu);
-		VecAssemblyEnd(uu);
-		PetscPrintf(comm, "======> Essential BC at x=0: prescribed temperature %g\n", gg_t);
+		PetscPrintf(comm, "======> Essential BC at x=0: prescribed temperature.\n");
 	}
-	else {
+	else if (tail_bc) {
 		PetscInt        row = M;
 		PetscInt        col[2] = {M-1, M};
 		PetscScalar     value[2] = {-1.0, 1.0};
@@ -261,16 +252,10 @@ int AddBC( MPI_Comm comm, Mat A, Vec uu, Vec ff, PetscInt M, PetscScalar hbc,
 		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
 		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
 
-		VecSetValues(uu, 1, &row, &hbc, INSERT_VALUES);
-		VecAssemblyBegin(uu);
-		VecAssemblyEnd(uu);
-
-		PetscPrintf(comm, "======> Natural BC at x=1: heat flux %g\n", hh_t);
+		PetscPrintf(comm, "======> Natural BC at x=1: heat flux.\n");
 	}
 
-	VecView(uu, PETSC_VIEWER_STDOUT_(comm));
-	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
-	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
+//	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
 
 	return 0;
 }
