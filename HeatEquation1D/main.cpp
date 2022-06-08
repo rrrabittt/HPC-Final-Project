@@ -64,30 +64,39 @@ int main( int argc, char **argv )
 	PetscOptionsGetBool(PETSC_NULL, PETSC_NULL, "-is_explicit",	&is_explicit, PETSC_NULL);
 	PetscOptionsGetBool(PETSC_NULL, PETSC_NULL, "-is_record",	&is_record, PETSC_NULL);
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-record_frq",	&record_frq, PETSC_NULL);
+	PetscOptionsGetBool(PETSC_NULL, PETSC_NULL, "-is_restart",	&is_restart, PETSC_NULL);
 
 	// hdf5 read
+	Vec	u_re;
+	VecCreate(comm, &u_re);
+	VecSetSizes(u_re, PETSC_DECIDE, M+1);
+	VecSetFromOptions(u_re);
 	if (is_restart) {
 		PetscPrintf(comm, "********** Restart: data loading from hdf5file... **********\n");
-		Vec	u_re;
 		Vec	temp;
-		VecCreate(comm, &u_re);
 		VecCreate(comm, &temp);
+		VecSetSizes(temp, PETSC_DECIDE, 3);
+		VecSetType(temp, VECSEQ);
 
 		PetscViewer	viewer;
 		PetscViewerHDF5Open(comm, "SOL_re", FILE_MODE_READ, &viewer);
-		PetscObjectSetName((PetscObject)u_re, "vector_u");
+		PetscObjectSetName((PetscObject)u_re, "current_u");
 		VecLoad(u_re, viewer);
 		PetscObjectSetName((PetscObject)temp, "parameters");
 		VecLoad(temp, viewer);
 		PetscViewerDestroy(&viewer);
 
-		PetscScalar	value[3];
-		PetscInt	index[3];
-		index[0] = 0; index[1] = 1; index[2] = 2;
-		VecGetValues(temp, 1, index, value);
+		PetscScalar	*value;
+		VecGetArray(temp, &value);
+		VecView(temp, PETSC_VIEWER_STDOUT_(comm));
 		M		= value[0];
 		delta_t		= value[1];
 		time_start	= value[2];
+		PetscPrintf(comm, "-mesh_size %D\n", M);
+		PetscPrintf(comm, "-time_step %g\n", delta_t);
+		PetscPrintf(comm, "-time_start %g\n", time_start);
+
+		VecDestroy(&temp);
 	}
 
 	// parameter check
@@ -208,6 +217,7 @@ int main( int argc, char **argv )
 	KSPDestroy(&ksp);
 	VecDestroy(&uu);
 	VecDestroy(&u_new);
+	VecDestroy(&u_re);
 	VecDestroy(&ff);
 	MatDestroy(&A);
 
@@ -271,14 +281,17 @@ void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 			PetscViewerHDF5Open(comm, file, FILE_MODE_WRITE, &viewer);
 			PetscObjectSetName((PetscObject)x, "current_u");
 			VecView(x, viewer);
+			Vec	temp;
+			VecCreate(comm, &temp);
+			VecSetSizes(temp, PETSC_DECIDE, 3);
+			VecSetType(temp, VECSEQ);
 			PetscScalar	value[3];
 			PetscInt	index[3];
-			Vec	temp;
 			value[0] = M; value[1] = delta_t; value[2] = time;
 			index[0] = 0; index[1] = 1; index[2] = 2;
 			VecSetValues(temp, 3, index, value, INSERT_VALUES);
-			VecAssemblyBegin(b);
-			VecAssemblyEnd(b);
+			VecAssemblyBegin(temp);
+			VecAssemblyEnd(temp);
 			PetscObjectSetName((PetscObject)temp, "parameters");
 			VecView(temp, viewer);
 			PetscViewerDestroy(&viewer);
@@ -326,14 +339,17 @@ void FEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, PetscInt M,
 			PetscViewerHDF5Open(comm, file, FILE_MODE_WRITE, &viewer);
 			PetscObjectSetName((PetscObject)x, "current_u");
 			VecView(x, viewer);
+			Vec	temp;
+			VecCreate(comm, &temp);
+			VecSetSizes(temp, PETSC_DECIDE, 3);
+			VecSetType(temp, VECSEQ);
 			PetscScalar	value[3];
 			PetscInt	index[3];
-			Vec	temp;
 			value[0] = M; value[1] = delta_t; value[2] = time;
 			index[0] = 0; index[1] = 1; index[2] = 2;
 			VecSetValues(temp, 3, index, value, INSERT_VALUES);
-			VecAssemblyBegin(b);
-			VecAssemblyEnd(b);
+			VecAssemblyBegin(temp);
+			VecAssemblyEnd(temp);
 			PetscObjectSetName((PetscObject)temp, "parameters");
 			VecView(temp, viewer);
 			PetscViewerDestroy(&viewer);
