@@ -1,7 +1,9 @@
 static char help[] = "To solve the transient heat equation in a one-dimensional domain.\n\n";
 
 #include <petscksp.h>
+#include "hdf5.h"
 
+// solver tools
 void FEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, PetscInt M,
 	PetscReal delta_t, PetscReal time_end, PetscInt head_bc, PetscInt tail_bc,
 	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t );
@@ -11,6 +13,11 @@ void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t );
 
 void MatBC( MPI_Comm comm, Mat A, PetscInt M, PetscInt head_bc, PetscInt tail_bc );
+
+// HDF5 tools
+void HDF5_Write();
+
+void HDF5_Read();
 
 int main( int argc, char **argv )
 {
@@ -57,7 +64,7 @@ int main( int argc, char **argv )
 	const double para2 = delta_t / (rho * cc);
 	PetscReal hbc_h = (delta_x * hh_h) / kappa;
 	PetscReal hbc_t = (delta_x * hh_t) / kappa;
-	const double pi = 3.141592653589793;
+	const double pi = PETSC_PI; //3.141592653589793;
 	const double ll = 1.0;
 
 	// spacial coordinates
@@ -303,3 +310,77 @@ void MatBC( MPI_Comm comm, Mat A, PetscInt M, PetscInt head_bc, PetscInt tail_bc
 //	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
 }
 
+void HDF5_Write_Solution(Vec uu, PetscInt M, const double para1, const double para2, const double ll,
+		PetscInt head_bc, PetscInt tail_bc, PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t,
+		PetscReal delta_t, PetscReal delta_x )
+{
+	// write current solution
+	hid_t	file_id;
+	hid_t	dataset_uu, dataset_para1, dataset_para2, dataset_M, dataset_delx, dataset_delt, dataset_ll;
+	hid_t	dataset_headbc, dataset_tailbc, dataset_hbch, dataset_hbct, dataset_ggh, dataset_ggt;
+	hid_t	dataspace_uu, dataspace_scalar;
+
+	hsize_t	dim_uu[1]; dim_uu[0] = M;
+	hsize_t	dim_scalar[1]; dim_scalar[0] = 1;
+
+	PetscScalar	*array;
+	VecGetArray(uu, &array);
+	const double delx = delta_x;
+
+	char file[10] = "SOL_";
+	char num[10] = "0000";
+	strcat(file, num);
+	file_id = H5Fcreate(file, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+
+	dataspace_uu = H5Screate_simple(1, dim_uu, NULL);
+	dataspace_scalar = H5Screate_simple(1, dim_scalar, NULL);
+
+	dataset_uu	= H5Dcreate2(file_id, "/Current_solution", H5T_NATIVE_DOUBLE, dataspace_uu, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_para1	= H5Dcreate2(file_id, "/Para1", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_para2	= H5Dcreate2(file_id, "/Para2", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_M	= H5Dcreate2(file_id, "/Matrix_size", H5T_NATIVE_INT, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_delx	= H5Dcreate2(file_id, "/Delta_x", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_delt	= H5Dcreate2(file_id, "/Delta_t", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_ll	= H5Dcreate2(file_id, "/Heat_src_para", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_headbc	= H5Dcreate2(file_id, "/Head_BC", H5T_NATIVE_INT, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_tailbc	= H5Dcreate2(file_id, "/Tail_BC", H5T_NATIVE_INT, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_hbch	= H5Dcreate2(file_id, "/Head_hbc", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_hbct	= H5Dcreate2(file_id, "/Tail_hbc", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_ggh	= H5Dcreate2(file_id, "/Head_gbc", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	dataset_ggt	= H5Dcreate2(file_id, "/Tail_gbc", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	
+
+	H5Dwrite(dataset_uu, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, array);
+	H5Dwrite(dataset_para1, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &para1);
+	H5Dwrite(dataset_para2, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &para2);
+	H5Dwrite(dataset_M, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &M);
+	H5Dwrite(dataset_delx, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &delta_x);
+	H5Dwrite(dataset_delt, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &delta_t);
+	H5Dwrite(dataset_ll, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &ll);
+	H5Dwrite(dataset_headbc, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &head_bc);
+	H5Dwrite(dataset_tailbc, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &tail_bc);
+	H5Dwrite(dataset_hbch, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &hbc_h);
+	H5Dwrite(dataset_hbct, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &hbc_t);
+	H5Dwrite(dataset_ggh, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &gg_h);
+	H5Dwrite(dataset_ggt, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &gg_t);
+
+	H5Dclose(dataset_uu);
+	H5Dclose(dataset_para1);
+	H5Dclose(dataset_para2);
+	H5Dclose(dataset_M);
+	H5Dclose(dataset_delx);
+	H5Dclose(dataset_delt);
+	H5Dclose(dataset_ll);
+	H5Dclose(dataset_headbc);
+	H5Dclose(dataset_tailbc);
+	H5Dclose(dataset_hbch);
+	H5Dclose(dataset_hbct);
+	H5Dclose(dataset_ggh);
+	H5Dclose(dataset_ggt);
+	H5Sclose(dataspace_uu);
+	H5Sclose(dataspace_scalar);
+
+	H5Fclose(file_id);
+}
+
+void HDF5_Read();
