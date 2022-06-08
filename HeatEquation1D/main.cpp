@@ -1,16 +1,18 @@
 static char help[] = "To solve the transient heat equation in a one-dimensional domain.\n\n";
 
 #include <petscksp.h>
-#include "hdf5.h"
+#include "petscviewerhdf5.h"
 
 // solver tools
 void FEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, PetscInt M,
-	PetscReal delta_t, PetscReal time_end, PetscInt head_bc, PetscInt tail_bc,
-	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t );
+	PetscReal delta_t, PetscReal time_start, PetscReal time_end, PetscInt head_bc, PetscInt tail_bc,
+	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t,
+	PetscBool is_record, PetscInt record_frq );
 
 void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
-	PetscReal delta_t, PetscReal time_end, PetscInt M, PetscInt head_bc, PetscInt tail_bc,
-	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t );
+	PetscReal delta_t, PetscReal time_start, PetscReal time_end, PetscInt M, PetscInt head_bc, PetscInt tail_bc,
+	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t,
+	PetscBool is_record, PetscInt record_frq );
 
 void MatBC( MPI_Comm comm, Mat A, PetscInt M, PetscInt head_bc, PetscInt tail_bc );
 
@@ -32,6 +34,7 @@ int main( int argc, char **argv )
 	PetscReal	cc = 1.0;	// specific heat capacity
 	PetscReal	delta_t = 0.1;
 	PetscReal	delta_x = 0.1;
+	PetscReal	time_start = 0.0;
 	PetscReal	time_end = 1.0;
 	PetscReal       gg_h = 0.0;	// prescribed temperature at x=0
 	PetscReal       gg_t = 0.0;	// prescribed temperature at x=1
@@ -40,6 +43,10 @@ int main( int argc, char **argv )
 	PetscInt	head_bc = 0;	// boundary condition at x=0: 0 for prescribed temperature, 1 for heat flux.
 	PetscInt	tail_bc = 0;	// boundary condition at x=0: 0 for prescribed temperature, 1 for heat flux.
 	PetscBool	is_explicit = PETSC_FALSE;
+	PetscBool	is_record = PETSC_TRUE;
+	PetscInt	record_frq = 10;
+	PetscBool	is_restart = PETSC_FALSE;
+
 
 	// get option
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-mesh_size",	&M, PETSC_NULL);
@@ -55,6 +62,33 @@ int main( int argc, char **argv )
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-head_bc",	&head_bc, PETSC_NULL);
 	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-tail_bc",	&tail_bc, PETSC_NULL);
 	PetscOptionsGetBool(PETSC_NULL, PETSC_NULL, "-is_explicit",	&is_explicit, PETSC_NULL);
+	PetscOptionsGetBool(PETSC_NULL, PETSC_NULL, "-is_record",	&is_record, PETSC_NULL);
+	PetscOptionsGetInt(PETSC_NULL, PETSC_NULL, "-record_frq",	&record_frq, PETSC_NULL);
+
+	// hdf5 read
+	if (is_restart) {
+		PetscPrintf(comm, "********** Restart: data loading from hdf5file... **********\n");
+		Vec	u_re;
+		Vec	temp;
+		VecCreate(comm, &u_re);
+		VecCreate(comm, &temp);
+
+		PetscViewer	viewer;
+		PetscViewerHDF5Open(comm, "SOL_re", FILE_MODE_READ, &viewer);
+		PetscObjectSetName((PetscObject)u_re, "vector_u");
+		VecLoad(u_re, viewer);
+		PetscObjectSetName((PetscObject)temp, "parameters");
+		VecLoad(temp, viewer);
+		PetscViewerDestroy(&viewer);
+
+		PetscScalar	value[3];
+		PetscInt	index[3];
+		index[0] = 0; index[1] = 1; index[2] = 2;
+		VecGetValues(temp, 1, index, value);
+		M		= value[0];
+		delta_t		= value[1];
+		time_start	= value[2];
+	}
 
 	// parameter check
 	delta_x = 1.0 / M;
@@ -66,6 +100,7 @@ int main( int argc, char **argv )
 	PetscReal hbc_t = (delta_x * hh_t) / kappa;
 	const double pi = PETSC_PI; //3.141592653589793;
 	const double ll = 1.0;
+
 
 	// spacial coordinates
 	double * coor_x = new double[M+1](); 
@@ -89,8 +124,6 @@ int main( int argc, char **argv )
 
 	VecAssemblyBegin(ff);
 	VecAssemblyEnd(ff);
-
-//	VecView(ff, PETSC_VIEWER_STDOUT_(comm));
 
 	// matrix A
 	Mat	A;
@@ -131,8 +164,6 @@ int main( int argc, char **argv )
 	MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
 	MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
 
-//	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
-
 	// initial condition: u_0 = exp(x)
 	double * u_0 = new double[M+1]();
 	for(int ii=0; ii<M+1; ii++) {
@@ -148,7 +179,7 @@ int main( int argc, char **argv )
 	VecAssemblyBegin(uu);
 	VecAssemblyEnd(uu);
 
-//	VecView(uu, PETSC_VIEWER_STDOUT_(comm));
+	if (is_restart) VecCopy(u_re, uu);
 
 	// boundary conditions
 	MatBC( comm, A, M, head_bc, tail_bc );
@@ -162,11 +193,13 @@ int main( int argc, char **argv )
 	
 	if (is_explicit) {
 		// explicit solver
-		FEuler( comm, A, u_new, uu, ff, M, delta_t, time_end, head_bc, tail_bc, hbc_h, hbc_t, gg_h, gg_t );
+		FEuler( comm, A, u_new, uu, ff, M, delta_t, time_start, time_end, head_bc, tail_bc, hbc_h, hbc_t, gg_h, gg_t,
+				is_record, record_frq );
 	}
 	else {
 		// implicit solver
-		BEuler( comm, A, u_new, uu, ff, ksp, pc, delta_t, time_end, M, head_bc, tail_bc, hbc_h, hbc_t, gg_h, hh_t );
+		BEuler( comm, A, u_new, uu, ff, ksp, pc, delta_t, time_start, time_end, M, head_bc, tail_bc, hbc_h, hbc_t,
+			       	gg_h, hh_t, is_record, record_frq );
 	}
 
 	VecView(u_new, PETSC_VIEWER_STDOUT_(comm));
@@ -184,14 +217,15 @@ int main( int argc, char **argv )
 }
 
 void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
-	PetscReal delta_t, PetscReal time_end, PetscInt M, PetscInt head_bc, PetscInt tail_bc,
-	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t )
+	PetscReal delta_t, PetscReal time_start, PetscReal time_end, PetscInt M, PetscInt head_bc, PetscInt tail_bc,
+	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t,
+	PetscBool is_record, PetscInt record_frq )
 {
-	PetscInt	N = time_end / delta_t;
+	PetscInt	N = (time_end - time_start) / delta_t;
 	PetscInt	its;
 	PetscInt	zero = 0;
 	PetscReal	rnorm;
-	PetscReal	time = 0.0;
+	PetscReal	time = time_start;
 
 	// ksp set
 	KSPSetOperators(ksp, A, A);
@@ -202,7 +236,7 @@ void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 	KSPSetFromOptions(ksp);
 
 	// solver
-	PetscPrintf(comm, "======> time_index: %D\t time: %g\n", (int)zero, (double)time);
+	PetscPrintf(comm, "======> time: %g\n", (double)time);
 	for(int ii=1; ii<N+1; ii++) {
 		time += delta_t;
 		VecAXPY(b, 1.0, f);
@@ -222,21 +256,45 @@ void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 		VecAssemblyEnd(b);
 		KSPSolve(ksp, b, x);
 		VecCopy(x, b);
-//		VecView(x, PETSC_VIEWER_STDOUT_(comm));
 		KSPMonitor(ksp, its, rnorm);
 		PetscPrintf(comm, "        step solver done.\n");
 		PetscPrintf(comm, "        KSP its: %D\t r_norm: %g\n", its, (double)rnorm);
-		PetscPrintf(comm, "======> time_index: %D\t time: %g\n", ii, (double)time);
+		PetscPrintf(comm, "======> time: %g\n", (double)time);
+
+		// hdf5 write
+		if (is_record && ii%record_frq==0) {
+			PetscViewer	viewer;
+			char file[10] = "SOL_";
+			char num[4];
+			sprintf(num, "%d", ii);
+			strcat(file, num);
+			PetscViewerHDF5Open(comm, file, FILE_MODE_WRITE, &viewer);
+			PetscObjectSetName((PetscObject)x, "current_u");
+			VecView(x, viewer);
+			PetscScalar	value[3];
+			PetscInt	index[3];
+			Vec	temp;
+			value[0] = M; value[1] = delta_t; value[2] = time;
+			index[0] = 0; index[1] = 1; index[2] = 2;
+			VecSetValues(temp, 3, index, value, INSERT_VALUES);
+			VecAssemblyBegin(b);
+			VecAssemblyEnd(b);
+			PetscObjectSetName((PetscObject)temp, "parameters");
+			VecView(temp, viewer);
+			PetscViewerDestroy(&viewer);
+			VecDestroy(&temp);
+		}
 	}
 }
 
 void FEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, PetscInt M,
-	PetscReal delta_t, PetscReal time_end, PetscInt head_bc, PetscInt tail_bc,
-	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t )
+	PetscReal delta_t, PetscReal time_start, PetscReal time_end, PetscInt head_bc, PetscInt tail_bc,
+	PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t,
+	PetscBool is_record, PetscInt record_frq )
 {
-	PetscInt	N = time_end / delta_t;
+	PetscInt	N = (time_end - time_start) / delta_t;
 	PetscInt	zero = 0;
-	PetscReal	time = 0.0;
+	PetscReal	time = time_start;
 
 	for(int ii=1; ii<N+1; ii++) {
 		time += delta_t;
@@ -257,6 +315,30 @@ void FEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, PetscInt M,
 		VecAssemblyEnd(b);
 		MatMult(A, b, x);
 		VecCopy(x, b);
+
+		// hdf5 write
+		if (is_record && ii%record_frq==0) {
+			PetscViewer	viewer;
+			char file[10] = "SOL_";
+			char num[4];
+			sprintf(num, "%d", ii);
+			strcat(file, num);
+			PetscViewerHDF5Open(comm, file, FILE_MODE_WRITE, &viewer);
+			PetscObjectSetName((PetscObject)x, "current_u");
+			VecView(x, viewer);
+			PetscScalar	value[3];
+			PetscInt	index[3];
+			Vec	temp;
+			value[0] = M; value[1] = delta_t; value[2] = time;
+			index[0] = 0; index[1] = 1; index[2] = 2;
+			VecSetValues(temp, 3, index, value, INSERT_VALUES);
+			VecAssemblyBegin(b);
+			VecAssemblyEnd(b);
+			PetscObjectSetName((PetscObject)temp, "parameters");
+			VecView(temp, viewer);
+			PetscViewerDestroy(&viewer);
+			VecDestroy(&temp);
+		}
 	}
 	PetscPrintf(comm, "======> solver done <======\n");
 }
@@ -309,78 +391,3 @@ void MatBC( MPI_Comm comm, Mat A, PetscInt M, PetscInt head_bc, PetscInt tail_bc
 	}
 //	MatView(A, PETSC_VIEWER_STDOUT_WORLD);
 }
-
-void HDF5_Write_Solution(Vec uu, PetscInt M, const double para1, const double para2, const double ll,
-		PetscInt head_bc, PetscInt tail_bc, PetscReal hbc_h, PetscReal hbc_t, PetscReal gg_h, PetscReal gg_t,
-		PetscReal delta_t, PetscReal delta_x )
-{
-	// write current solution
-	hid_t	file_id;
-	hid_t	dataset_uu, dataset_para1, dataset_para2, dataset_M, dataset_delx, dataset_delt, dataset_ll;
-	hid_t	dataset_headbc, dataset_tailbc, dataset_hbch, dataset_hbct, dataset_ggh, dataset_ggt;
-	hid_t	dataspace_uu, dataspace_scalar;
-
-	hsize_t	dim_uu[1]; dim_uu[0] = M;
-	hsize_t	dim_scalar[1]; dim_scalar[0] = 1;
-
-	PetscScalar	*array;
-	VecGetArray(uu, &array);
-	const double delx = delta_x;
-
-	char file[10] = "SOL_";
-	char num[10] = "0000";
-	strcat(file, num);
-	file_id = H5Fcreate(file, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
-
-	dataspace_uu = H5Screate_simple(1, dim_uu, NULL);
-	dataspace_scalar = H5Screate_simple(1, dim_scalar, NULL);
-
-	dataset_uu	= H5Dcreate2(file_id, "/Current_solution", H5T_NATIVE_DOUBLE, dataspace_uu, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_para1	= H5Dcreate2(file_id, "/Para1", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_para2	= H5Dcreate2(file_id, "/Para2", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_M	= H5Dcreate2(file_id, "/Matrix_size", H5T_NATIVE_INT, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_delx	= H5Dcreate2(file_id, "/Delta_x", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_delt	= H5Dcreate2(file_id, "/Delta_t", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_ll	= H5Dcreate2(file_id, "/Heat_src_para", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_headbc	= H5Dcreate2(file_id, "/Head_BC", H5T_NATIVE_INT, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_tailbc	= H5Dcreate2(file_id, "/Tail_BC", H5T_NATIVE_INT, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_hbch	= H5Dcreate2(file_id, "/Head_hbc", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_hbct	= H5Dcreate2(file_id, "/Tail_hbc", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_ggh	= H5Dcreate2(file_id, "/Head_gbc", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	dataset_ggt	= H5Dcreate2(file_id, "/Tail_gbc", H5T_NATIVE_DOUBLE, dataspace_scalar, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	
-
-	H5Dwrite(dataset_uu, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, array);
-	H5Dwrite(dataset_para1, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &para1);
-	H5Dwrite(dataset_para2, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &para2);
-	H5Dwrite(dataset_M, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &M);
-	H5Dwrite(dataset_delx, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &delta_x);
-	H5Dwrite(dataset_delt, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &delta_t);
-	H5Dwrite(dataset_ll, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &ll);
-	H5Dwrite(dataset_headbc, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &head_bc);
-	H5Dwrite(dataset_tailbc, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &tail_bc);
-	H5Dwrite(dataset_hbch, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &hbc_h);
-	H5Dwrite(dataset_hbct, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &hbc_t);
-	H5Dwrite(dataset_ggh, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &gg_h);
-	H5Dwrite(dataset_ggt, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, &gg_t);
-
-	H5Dclose(dataset_uu);
-	H5Dclose(dataset_para1);
-	H5Dclose(dataset_para2);
-	H5Dclose(dataset_M);
-	H5Dclose(dataset_delx);
-	H5Dclose(dataset_delt);
-	H5Dclose(dataset_ll);
-	H5Dclose(dataset_headbc);
-	H5Dclose(dataset_tailbc);
-	H5Dclose(dataset_hbch);
-	H5Dclose(dataset_hbct);
-	H5Dclose(dataset_ggh);
-	H5Dclose(dataset_ggt);
-	H5Sclose(dataspace_uu);
-	H5Sclose(dataspace_scalar);
-
-	H5Fclose(file_id);
-}
-
-void HDF5_Read();
