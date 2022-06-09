@@ -16,11 +16,6 @@ void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 
 void MatBC( MPI_Comm comm, Mat A, PetscInt M, PetscInt head_bc, PetscInt tail_bc );
 
-// HDF5 tools
-void HDF5_Write();
-
-void HDF5_Read();
-
 int main( int argc, char **argv )
 {
 	// initialization
@@ -76,7 +71,7 @@ int main( int argc, char **argv )
 		Vec	temp;
 		VecCreate(comm, &temp);
 		VecSetSizes(temp, PETSC_DECIDE, 3);
-		VecSetType(temp, VECSEQ);
+		VecSetFromOptions(temp);
 
 		PetscViewer	viewer;
 		PetscViewerHDF5Open(comm, "SOL_re", FILE_MODE_READ, &viewer);
@@ -88,7 +83,6 @@ int main( int argc, char **argv )
 
 		PetscScalar	*value;
 		VecGetArray(temp, &value);
-		VecView(temp, PETSC_VIEWER_STDOUT_(comm));
 		M		= value[0];
 		delta_t		= value[1];
 		time_start	= value[2];
@@ -96,6 +90,7 @@ int main( int argc, char **argv )
 		PetscPrintf(comm, "-time_step %g\n", delta_t);
 		PetscPrintf(comm, "-time_start %g\n", time_start);
 
+		VecRestoreArray(temp, &value);
 		VecDestroy(&temp);
 	}
 
@@ -124,8 +119,7 @@ int main( int argc, char **argv )
 	}
 
 	Vec	ff;
-	VecCreate(comm, &ff);
-	VecSetSizes(ff, PETSC_DECIDE, M+1);
+	VecDuplicate(u_re, &ff);
 	VecSetFromOptions(ff);
 	for(PetscInt ii=0; ii<M+1; ii++) {
 		VecSetValues(ff, 1, &ii, &h_src[ii], INSERT_VALUES);
@@ -211,18 +205,58 @@ int main( int argc, char **argv )
 			       	gg_h, hh_t, is_record, record_frq );
 	}
 
-	VecView(u_new, PETSC_VIEWER_STDOUT_(comm));
+//	VecView(u_new, PETSC_VIEWER_STDOUT_(comm));
+	PetscReal max;
+	VecMax(u_new, PETSC_NULL, &max);
+	PetscPrintf(comm, "======> maximum: %g\n", (double)max);
+
+	// error analysis
+	double * u_exact = new double[M+1]();
+	for(int ii=1; ii<M+1; ii++) {
+		u_exact[ii] = sin (pi * coor_x[ii]) / (kappa * pi * pi);
+	}
+	Vec	u_ect;
+	VecDuplicate(uu, &u_ect);
+	VecSetFromOptions(u_ect);
+	for(PetscInt ii=0; ii<M+1; ii++) {
+		VecSetValues(u_ect, 1, &ii, &u_exact[ii], INSERT_VALUES);
+	}
+	VecAssemblyBegin(u_ect);
+	VecAssemblyEnd(u_ect);
+
+	Vec	err;
+	VecDuplicate(uu, &err);
+	VecSetFromOptions(err);
+	VecWAXPY(err, -1.0, u_new, u_ect);
+	VecAbs(err);
+	PetscReal error;
+	VecMax(err, PETSC_NULL, &error);
+	PetscPrintf(comm, "======> error: %g\n", (double)error);
+
+	// tecplot
+	FILE *plot = fopen("result.plt","w");
+        fprintf(plot, "TITLE=\"1D result\"\n");
+        fprintf(plot, "ZONES\"\n");
+        fprintf(plot, "VARIABLES = \"X\", \"Y\", \"U\"\n");
+        fprintf(plot, "ZONE T=\"2-D Domain\", F=POINT,\n");
+
+        for (int ii=0; ii<M+1; ii++){
+		PetscReal	value;
+                VecGetValues(u_new, 1, &ii, &value);
+                fprintf(plot, "%g  %g  %g\n", coor_x[ii], 0.0, value);
+        }
 
 	// destory
 	KSPDestroy(&ksp);
 	VecDestroy(&uu);
 	VecDestroy(&u_new);
 	VecDestroy(&u_re);
+	VecDestroy(&u_ect);
 	VecDestroy(&ff);
 	MatDestroy(&A);
 
 	PetscFinalize();
-	delete [] coor_x; delete [] h_src; delete [] u_0;
+	delete [] coor_x; delete [] h_src; delete [] u_0; delete [] u_exact;
 	return 0;
 }
 
@@ -274,8 +308,8 @@ void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 		// hdf5 write
 		if (is_record && ii%record_frq==0) {
 			PetscViewer	viewer;
-			char file[10] = "SOL_";
-			char num[4];
+			char file[20] = "SOL_";
+			char num[10];
 			sprintf(num, "%d", ii);
 			strcat(file, num);
 			PetscViewerHDF5Open(comm, file, FILE_MODE_WRITE, &viewer);
@@ -284,7 +318,7 @@ void BEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, KSP ksp, PC pc,
 			Vec	temp;
 			VecCreate(comm, &temp);
 			VecSetSizes(temp, PETSC_DECIDE, 3);
-			VecSetType(temp, VECSEQ);
+			VecSetFromOptions(temp);
 			PetscScalar	value[3];
 			PetscInt	index[3];
 			value[0] = M; value[1] = delta_t; value[2] = time;
@@ -342,7 +376,7 @@ void FEuler( MPI_Comm comm, Mat A, Vec x, Vec b, Vec f, PetscInt M,
 			Vec	temp;
 			VecCreate(comm, &temp);
 			VecSetSizes(temp, PETSC_DECIDE, 3);
-			VecSetType(temp, VECSEQ);
+			VecSetFromOptions(temp);
 			PetscScalar	value[3];
 			PetscInt	index[3];
 			value[0] = M; value[1] = delta_t; value[2] = time;
@@ -392,7 +426,7 @@ void MatBC( MPI_Comm comm, Mat A, PetscInt M, PetscInt head_bc, PetscInt tail_bc
 		MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
 		MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
 
-		PetscPrintf(comm, "======> Essential BC at x=0: prescribed temperature.\n");
+		PetscPrintf(comm, "======> Essential BC at x=1: prescribed temperature.\n");
 	}
 	else {
 		PetscInt	row = M;
