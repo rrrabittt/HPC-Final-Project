@@ -2,6 +2,7 @@
 Project details: [Final Project.pdf](https://github.com/rrrabittt/HPC-Final-Project/files/8596876/Final.Project.pdf)
 
 Options in command line:
+
 `-mesh_size` grid size in spacial domain, default value is `10`, the number of nodes is `mesh_size`+1.
 
 `-kappa` conductivity, default value is `1.0`.
